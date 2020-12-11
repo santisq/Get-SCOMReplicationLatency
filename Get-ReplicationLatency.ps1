@@ -1,4 +1,4 @@
-﻿function Get-ReplicationLatency{
+﻿function Get-SCOMReplicationLatency{
 [cmdletbinding()]
 [alias('grl')]
 param(
