@@ -1,4 +1,24 @@
 ﻿function Get-SCOMReplicationLatency{
+<#
+
+.DESCRIPTION
+Queries the OpsMgrLatencyMonitors container of a target server and calculates TimeDifference replication with its partners.
+Output can be displayed on a GridView using the GridView switch or standard output to save in a variable.
+
+.EXAMPLE
+Get-SCOMReplicationLatency DC01 -GridView
+
+.EXAMPLE
+$savingToVar = Get-SCOMReplicationLatency DC01
+
+.EXAMPLE
+Get-ADDomainController -Filter * | Get-SCOMReplicationLatency > This would check replication latency on all Domain Controllers.
+
+.NOTES
+Requirements: ActiveDirectory & ThreadJob PS Modules.
+
+#>
+
 [cmdletbinding()]
 [alias('grl')]
 param(
