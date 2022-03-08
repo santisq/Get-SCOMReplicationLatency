@@ -1,89 +1,78 @@
-﻿function Get-SCOMReplicationLatency{
-<#
+#Requires -Modules ActiveDirectory, ThreadJob
 
+function Get-SCOMReplicationLatency{
+<#
 .DESCRIPTION
 Queries the OpsMgrLatencyMonitors container of a target server and calculates TimeDifference replication with its partners.
 Output can be displayed on a GridView using the GridView switch or standard output to save in a variable.
-
 .EXAMPLE
 Get-SCOMReplicationLatency DC01 -GridView
-
 .EXAMPLE
 $savingToVar = Get-SCOMReplicationLatency DC01
-
 .EXAMPLE
 Get-ADDomainController -Filter * | Get-SCOMReplicationLatency > This would check replication latency on all Domain Controllers.
-
 .NOTES
 Requirements: ActiveDirectory & ThreadJob PS Modules.
-
 #>
 
 [cmdletbinding()]
 [alias('grl')]
 param(
-    [parameter(mandatory,valuefrompipelinebypropertyname)]
-    [string]$Name,
-    [switch]$GridView
+    [parameter(Mandatory, ValueFromPipelineByPropertyName)]
+    [string] $Name,
+    [int] $ThrottleLimit = 10,
+    [switch] $GridView
 )
 
-begin{
-
-#Requires -Modules ActiveDirectory, ThreadJob
-
-$UTC=(Get-Date).ToUniversalTime()
-
-}
-
-process{
-
-Start-ThreadJob {
-
-    $Name=$using:Name
-    $defNamingContext=$namingContext=(Get-ADRootDSE -Server $Name).defaultNamingContext
-    $objDirDomain=New-Object System.DirectoryServices.DirectoryEntry("LDAP://{0}/CN=OpsMgrLatencyMonitors,{1}" -f $Name,$defNamingContext)
-
-    $objDirSearcher=New-Object System.DirectoryServices.DirectorySearcher
-    $objDirSearcher.SearchRoot=$objDirDomain
-    $objDirSearcher.PageSize=2000
-    $objDirSearcher.Filter="(&(objectClass=Container))"
-    $objDirSearcher.SearchScope = "OneLevel"
-    'Name,whenChanged,adminDescription'.Split(',')|%{$objDirSearcher.PropertiesToLoad.Add($_) > $null}
-
-    $Containers=$objDirSearcher.FindAll()
-
-    foreach($Container in $Containers)
-    {
-        $DCName=$Container.Properties['Name']
-        $whenChanged=[datetime]$Container.Properties['whenChanged'][0]
-        $adminDescription=$Container.Properties['adminDescription'][0]
-        $adminDescription=[datetime]::ParseExact($adminDescription,'yyyyMMdd.HHmmss',[Globalization.CultureInfo]::CurrentCulture)
-
-        [timespan]$timeDiff=[datetime]$adminDescription-[datetime]$using:UTC
-        [timespan]$repTime=[datetime]$whenChanged-[datetime]$adminDescription
+    begin {
+        $threadJob = {
+            $UTC = [datetime]::Now.ToUniversalTime()
+            $Name = $using:Name
+            $defNamingContext = (Get-ADRootDSE -Server $Name).defaultNamingContext
+            $ldap = "LDAP://{0}/CN=OpsMgrLatencyMonitors,{1}" -f $Name, $defNamingContext
+            $entry    = [System.DirectoryServices.DirectoryEntry]::new($ldap)
+            $searcher = [System.DirectoryServices.DirectorySearcher]::new()
+            $searcher.SearchRoot  = $entry
+            $searcher.PageSize    = 2000
+            $searcher.Filter      = "(&(objectClass=Container))"
+            $searcher.SearchScope = "OneLevel"
+            $searcher.PropertiesToLoad.AddRange(@('Name', 'whenChanged', 'adminDescription'))
+            $Containers = $searcher.FindAll()
     
-        [pscustomObject]@{
-            Source=$Name.ToUpper()
-            Destination=$DCName.ToUpper()
-            'WhenChanged (UTC)'=$whenChanged
-            'AdminDescription (UTC)'=$adminDescription
-            ReplicationTime=$repTime
-            TimeDifference=$timeDiff
+            foreach($Container in $Containers) {
+                $destination = $Container.Properties['Name'][0]
+                $whenChanged = $Container.Properties['whenChanged'][0]
+                $adminDescription = $Container.Properties['adminDescription'][0]
+                $adminDescription = [datetime]::ParseExact(
+                    $adminDescription,
+                    'yyyyMMdd.HHmmss',
+                    [Globalization.CultureInfo]::CurrentCulture
+                )
+    
+                $timeDiff = $adminDescription - $UTC
+                $repTime  = $whenChanged - $adminDescription
+    
+                [pscustomObject]@{
+                    Source                   = $Name.ToUpper()
+                    Destination              = $destination.ToUpper()
+                    'WhenChanged (UTC)'      = $whenChanged
+                    'AdminDescription (UTC)' = $adminDescription
+                    ReplicationTime          = $repTime
+                    TimeDifference           = $timeDiff
+                }
+            }
         }
     }
 
-} -ThrottleLimit 10 > $null
+    process {
+        $null = Start-ThreadJob -ScriptBlock $threadJob -ThrottleLimit $ThrottleLimit
+    }
 
-}
-
-end{
-
-$Grid=[System.Collections.ArrayList]@(Get-Job|Wait-Job|Receive-Job)
-Get-Job|Remove-Job
-
-if($GridView.IsPresent){return $Grid|sort Source,ReplicationTime|Out-GridView -Title DCReplication}
-else{return $Grid|sort Source,ReplicationTime}
-
-}
-
+    end {
+        $result = Get-Job | Receive-Job -Wait -AutoRemoveJob | Sort-Object Source, ReplicationTime
+        if($GridView.IsPresent) {
+            return $result | Out-GridView -Title DCReplication
+        }
+        $result
+    }
 }
